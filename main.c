@@ -207,5 +207,8 @@ main (argc, argv)
     }
 
   for (;;)
+    {
       runturn (argv + 1);
+      sleep(1);
+    }
 }
