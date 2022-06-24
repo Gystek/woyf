@@ -7,50 +7,22 @@
   *----------------------------------------------------------------------------
   */
 #include <errno.h>
-#include <getopt.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdint.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
+#include <sys/inotify.h>
 #include <sys/types.h>
-#include <sys/wait.h>
-#include <time.h>
 #include <unistd.h>
 
 #define MAX_LINE (4096)
+#define NOTIFICATION_SIZE (sizeof(struct inotify_event) + NAME_MAX + 1)
+#define BUFFER_SIZE (1024 * (NOTIFICATION_SIZE))
 #define progname() ("woyf")
 
-static char **fl = NULL;
-static time_t *tl = NULL;
-size_t fc = 0;
-
-static int
-getfiledate (dest, path)
-     time_t     *dest;
-     const char *path;
-{
-  struct stat buf;
-  if (stat (path, &buf) != 0)
-    {
-      fprintf (stderr, "%s: %s: %s\n", progname(), path, strerror (errno));
-      return 1;
-    }
-  *dest = (buf.st_mtime);
-
-  return 0;
-}
-
-static void
-freefilelist (void)
-{
-  size_t i = 0;
-
-  for (; i < fc; i++)
-    free (fl[i]);
-  free (fl);
-}
+static int inotify_fd;
 
 static char *
 trim (buffer)
@@ -71,26 +43,13 @@ trim (buffer)
 static int
 getfilelist (void)
 {
-  size_t i = 0;
   char buffer[MAX_LINE];
 
   while (fgets (buffer, MAX_LINE, stdin) != NULL)
     {
-
-      fl = realloc (fl, sizeof(uintptr_t) * ++i);
-      if (fl == NULL)
-	return 1;
-
-      fl[i - 1] = malloc (sizeof(char) * MAX_LINE);
-      if (fl[i - 1] == NULL)
-	{
-	  freefilelist ();
-	  return 1;
-	}
-      strcpy (fl[i - 1], trim (buffer));
+      if (inotify_add_watch (inotify_fd, trim(buffer), IN_CREATE | IN_DELETE | IN_DELETE_SELF | IN_MODIFY) == -1)
+	return -1;
     }
-
-  fc = i;
 
   return 0;
 }
@@ -115,41 +74,12 @@ exec_command (command)
   return ret;
 }
 
-static int
-runturn (command)
-     char *const command[];
-{
-  size_t i;
-
-  for (i = 0; i < fc; i++)
-    {
-      const char *fname = fl[i];
-      time_t current = tl[i];
-      time_t new;
-
-      if (getfiledate (&new, fname) != 0)
-	return 1;
-
-      if (new > current)
-	{
-	  fprintf (stderr, "%s: file `%s' has changed\n", progname(), fname);
-	  tl[i] = new;
-	  if (exec_command (command) != 0)
-	    return 1;
-	  return 0;
-	}
-    }
-
-  return 0;
-}
-
 static void
 exit_cleanly (sig)
      int sig;
 {
   (void)sig;
-  freefilelist ();
-  free (tl);
+  close (inotify_fd);
   fprintf (stderr, "%s: exiting cleanly. Goodbye.\n", progname());
 
   exit (EXIT_SUCCESS);
@@ -160,10 +90,9 @@ main (argc, argv)
      int argc;
      char *const argv[];
 {
-  time_t current;
-  size_t i;
   pid_t pid;
   struct sigaction action;
+  uint8_t buffer[BUFFER_SIZE];
 
   if (argc < 2)
     {
@@ -177,27 +106,30 @@ main (argc, argv)
   if (sigaction (SIGTERM, &action, NULL) == -1)
     return EXIT_FAILURE;
 
-  time (&current);
-
-  getfilelist ();
-  if (fc == 0)
-    return EXIT_FAILURE;
-
-  tl = calloc (fc, sizeof(time_t));
-  if (tl == NULL)
+  inotify_fd = inotify_init ();
+  if (inotify_fd == -1)
     {
-      freefilelist ();
+      fprintf (stderr, "%s: failed to initialize an inotify instance\n", progname());
+
       return EXIT_FAILURE;
     }
 
-  for (i = 0; i < fc ; i++)
-    tl[i] = current;
+  if (getfilelist () != 0)
+    {
+      fprintf (stderr, "%s: failed to add files to the watchlist\n", progname());
+      close (inotify_fd);
+
+      return EXIT_FAILURE;
+    }
 
   pid = fork ();
 
   if (pid < 0)
     {
       fprintf (stderr, "%s: failed to fork process\n", progname());
+      close (inotify_fd);
+
+      return EXIT_FAILURE;
     }
 
   if (pid > 0)
@@ -208,7 +140,21 @@ main (argc, argv)
 
   for (;;)
     {
-      runturn (argv + 1);
-      sleep(1);
+      int ret, bytes, i;
+
+      if (bytes = read (inotify_fd, buffer, BUFFER_SIZE), bytes == -1)
+	{
+	  fprintf (stderr, "%s: failed to read filesystem event\n", progname());
+	  close (inotify_fd);
+
+	  return EXIT_FAILURE;
+	}
+
+      for (i = 0; i < bytes; i += NOTIFICATION_SIZE)
+	{
+	  if (ret = exec_command (argv + 1), ret != 0)
+	    fprintf (stderr, "%s: command execution failed with exit code %d\n", progname(), ret);
+	}
     }
 }
+

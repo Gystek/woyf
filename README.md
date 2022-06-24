@@ -1,6 +1,6 @@
 woyf - watch over your files
 ----------------------------
-woyf is a stupidly simple file watcher that doesn't use inotify(7).
+woyf is a stupidly simple file watcher using inotify(7).
 
 Requirements
 ------------

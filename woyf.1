@@ -8,14 +8,23 @@ COMMAND [\fIARGS...\fR]
 This program executes a COMMAND with the given ARGS when a FILE
 changes.
 .br
-FILEs are supplied on the standard input with one FILE per line. The
-list must be ended by an EOF character.
+This program watches over the following events:
 .br
-When a file changes, the program displays a message of the form `woyf:
-file FILE has changed` on the standard error file.
+	- Creation of a file inside a directory.
+.br
+	- Deletion of a file inside a directory.
+.br
+	- Deletion of a FILE.
+.br
+	- Modification of a file.
+
+FILEs are supplied on the standard input with one FILE per line.
+.br
+The list must be ended by an EOF character. A FILE can either be a
+regular file or a directory.
 .SH EXAMPLES
-$ echo "main.c" | ./woyf make all
+$ find ./ -name '*.c' -type f | ./woyf make all
 .SH AUTHORS
 Written by Gustek \<gustek@riseup.net\>.
 .SH SEE ALSO
-stat(3)
+inotify(7)
